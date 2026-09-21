@@ -108,4 +108,11 @@ def main():
         json.dump(history, f, indent=2, ensure_ascii=False)
 
 if __name__ == "__main__":
-    main()
+    # 在雲端持續監控 300 次（每 30 秒一次，約 2.5 小時），降價立刻發 Bark
+    for _ in range(300):
+        try:
+            main()
+        except Exception as e:
+            print(f"查詢出錯: {e}")
+        time.sleep(30)
+
