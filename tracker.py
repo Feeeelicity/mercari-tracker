@@ -5,8 +5,8 @@ import time
 import requests
 from playwright.sync_api import sync_playwright
 
-ITEM_ID = "m94085182715"
-HK_MERCARI_URL = "https://hk.mercari.com/zh-hant/items/db7dc988-040d-43a6-9421-718d51613ff3"
+ITEM_ID = "m33826165302"
+HK_MERCARI_URL = "https://jp.mercari.com/item/m33826165302?srsltid=AU7gw4WoiSJQfuTJ9MTB7wG6e_NY5Vuv-SS1jYCUtX8Lp2HN05A7K0O1"
 JP_ORIGINAL_URL = f"https://jp.mercari.com/item/{ITEM_ID}"
 DATA_FILE = "price_history.json"
 BARK_KEY = "u5QavuFqXT4ps7FxX6vFiS"
