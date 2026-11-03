@@ -10,9 +10,8 @@ TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
 ITEMS_FILE = "items.txt"
 DATA_FILE = "price_history.json"
 
-# 即時連線抓取當刻即時匯率 (JPY -> HKD)
+# 連線抓取即時匯率 (JPY -> HKD)
 def get_live_exchange_rate():
-    # 優先嘗試第一家權威即時外匯介面
     try:
         res = requests.get("https://open.er-api.com/v6/latest/JPY", timeout=8)
         if res.status_code == 200:
@@ -23,7 +22,6 @@ def get_live_exchange_rate():
     except Exception as e:
         print(f"主要匯率 API 連線異常: {e}")
 
-    # 備用即時匯率介面 (Frankfurter / ECB 歐洲央行即時牌價)
     try:
         res = requests.get("https://api.frankfurter.app/latest?from=JPY&to=HKD", timeout=8)
         if res.status_code == 200:
@@ -34,12 +32,10 @@ def get_live_exchange_rate():
     except Exception as e:
         print(f"備用匯率 API 連線異常: {e}")
 
-    # 兩者皆無法連線時的安全基準值
     return 0.051
 
 def format_dual_price(yen_amount, rate):
     hkd_val = round(yen_amount * rate, 1)
-    # 若有小數點顯示 1 位，整數則直出，並註記當刻匯率
     return f"¥{yen_amount:,}（約 HK${hkd_val:,.1f}，匯率 {rate:.4f}）"
 
 def send_telegram_alert(text):
@@ -100,7 +96,6 @@ def fetch_item_info(page, hk_url):
     yen_price = None
     try:
         raw_body = page.inner_text("body")
-        # 精準鎖定日圓原價標籤 (JP¥75,000)
         yen_match = re.search(r"\(JP[¥￥]([0-9,]+)\)|\([¥￥]([0-9,]+)\)|JP[¥￥]\s*([0-9,]+)", raw_body)
         if yen_match:
             yen_str = yen_match.group(1) or yen_match.group(2) or yen_match.group(3)
@@ -116,7 +111,6 @@ def check_all():
         print("未在 items.txt 找到任何商品！")
         return
 
-    # 每一輪檢查前，直接連線取得最新真實匯率
     live_rate = get_live_exchange_rate()
     print(f"📊 當刻最新日圓兌港幣市場即時匯率: {live_rate:.5f}")
 
@@ -124,37 +118,3 @@ def check_all():
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
-                history = json.load(f)
-        except:
-            history = {}
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            locale="zh-HK"
-        )
-        page = context.new_page()
-
-        for item in items:
-            item_id = item["id"]
-            name = item["name"]
-            web_title, yen_price = fetch_item_info(page, item["hk_url"])
-            display_name = name if name != item_id else (web_title or item_id)
-
-            if not yen_price:
-                print(f"❌ 無法讀取 [{display_name}] 價格")
-                continue
-
-            current_fmt = format_dual_price(yen_price, live_rate)
-            print(f"[{display_name}] 當前價: {current_fmt}")
-            
-            old_yen = history.get(item_id)
-
-            if old_yen is None:
-                msg = (
-                    f"🟢 <b>Mercari 雲端監控已加入！</b>\n"
-                    f"商品：{display_name}\n"
-                    f"目前價格：<b>{current_fmt}</b>\n"
-                    f"🔗 <a href='{item['hk_url']}'>香港頁面</a> | <a href='{item['jp_url']}'>日本原站</a>\n"
-                    f"<code>{item['jp_url']}</code>（點擊可直接複製）
