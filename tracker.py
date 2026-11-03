@@ -10,7 +10,6 @@ TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
 ITEMS_FILE = "items.txt"
 DATA_FILE = "price_history.json"
 
-# 連線抓取即時匯率 (JPY -> HKD)
 def get_live_exchange_rate():
     try:
         res = requests.get("https://open.er-api.com/v6/latest/JPY", timeout=8)
@@ -90,7 +89,7 @@ def fetch_item_info(page, hk_url):
             if "公告" not in t and len(t) > 0:
                 title = t
                 break
-    except:
+    except Exception:
         pass
 
     yen_price = None
@@ -118,3 +117,76 @@ def check_all():
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
+                history = json.load(f)
+        except Exception:
+            history = {}
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            locale="zh-HK"
+        )
+        page = context.new_page()
+
+        for item in items:
+            item_id = item["id"]
+            name = item["name"]
+            jp_url = item["jp_url"]
+            hk_url = item["hk_url"]
+            
+            web_title, yen_price = fetch_item_info(page, hk_url)
+            display_name = name if name != item_id else (web_title or item_id)
+
+            if not yen_price:
+                print(f"❌ 無法讀取 [{display_name}] 價格")
+                continue
+
+            current_fmt = format_dual_price(yen_price, live_rate)
+            print(f"[{display_name}] 當前價: {current_fmt}")
+            
+            old_yen = history.get(item_id)
+
+            if old_yen is None:
+                msg = (
+                    f"🟢 <b>Mercari 雲端監控已加入！</b>\n"
+                    f"商品：{display_name}\n"
+                    f"目前價格：<b>{current_fmt}</b>\n"
+                    f"🔗 <a href=\"{hk_url}\">香港頁面</a> | <a href=\"{jp_url}\">日本原站</a>\n"
+                    f"<code>{jp_url}</code>（點擊可直接複製）"
+                )
+                send_telegram_alert(msg)
+            elif yen_price != old_yen:
+                old_fmt = format_dual_price(old_yen, live_rate)
+                diff = yen_price - old_yen
+                diff_fmt = format_dual_price(abs(diff), live_rate)
+                
+                if diff < 0:
+                    status = f"🚨 <b>價格下跌！快搶！</b> (日圓降了 {diff_fmt})"
+                else:
+                    status = f"📈 <b>價格上漲！</b> (日圓升了 {diff_fmt})"
+
+                msg = (
+                    f"{status}\n"
+                    f"商品：{display_name}\n"
+                    f"價格變動：{old_fmt} ➔ <b>{current_fmt}</b>\n"
+                    f"🔗 <a href=\"{hk_url}\">香港頁面</a> | <a href=\"{jp_url}\">日本原站</a>\n"
+                    f"<code>{jp_url}</code>（點擊可直接複製）"
+                )
+                send_telegram_alert(msg)
+
+            history[item_id] = yen_price
+
+        browser.close()
+
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=2, ensure_ascii=False)
+
+if __name__ == "__main__":
+    print("🚀 啟動多商品實時外匯雙幣監控...")
+    for i in range(300):
+        try:
+            check_all()
+        except Exception as e:
+            print(f"輪巡出錯: {e}")
+        time.sleep(30)
