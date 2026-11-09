@@ -92,9 +92,22 @@ def fetch_item_info(page, hk_url):
     except Exception:
         pass
 
-    yen_price = None
+    raw_body = ""
     try:
         raw_body = page.inner_text("body")
+    except Exception:
+        pass
+
+    # 售罄狀態檢測
+    is_sold = False
+    sold_keywords = ["已售完", "已售出", "售罄", "売り切れ", "SOLD OUT", "Sold Out"]
+    for kw in sold_keywords:
+        if kw in raw_body:
+            is_sold = True
+            break
+
+    yen_price = None
+    try:
         yen_match = re.search(r"\(JP[¥￥]([0-9,]+)\)|\([¥￥]([0-9,]+)\)|JP[¥￥]\s*([0-9,]+)", raw_body)
         if yen_match:
             yen_str = yen_match.group(1) or yen_match.group(2) or yen_match.group(3)
@@ -102,7 +115,7 @@ def fetch_item_info(page, hk_url):
     except Exception as e:
         print(f"解析日圓原價出錯: {e}")
 
-    return title, yen_price
+    return title, yen_price, is_sold
 
 def check_all():
     items = load_items()
@@ -135,47 +148,74 @@ def check_all():
             jp_url = item["jp_url"]
             hk_url = item["hk_url"]
             
-            web_title, yen_price = fetch_item_info(page, hk_url)
+            web_title, yen_price, is_sold = fetch_item_info(page, hk_url)
             display_name = name if name != item_id else (web_title or item_id)
 
-            if not yen_price:
-                print(f"❌ 無法讀取 [{display_name}] 價格")
+            if not yen_price and not is_sold:
+                print(f"❌ 無法讀取 [{display_name}] 價格或狀態")
                 continue
 
-            current_fmt = format_dual_price(yen_price, live_rate)
-            print(f"[{display_name}] 當前價: {current_fmt}")
+            current_fmt = format_dual_price(yen_price, live_rate) if yen_price else "未知"
+            print(f"[{display_name}] 當前價: {current_fmt} | 售出狀態: {'已售出' if is_sold else '在庫'}")
             
-            old_yen = history.get(item_id)
+            record = history.get(item_id)
+            if isinstance(record, dict):
+                old_yen = record.get("price")
+                already_notified_sold = record.get("sold", False)
+            else:
+                old_yen = record
+                already_notified_sold = False
 
-            if old_yen is None:
+            # 1. 檢測商品是否已售出
+            if is_sold and not already_notified_sold:
                 msg = (
-                    f"🟢 <b>Mercari 雲端監控已加入！</b>\n"
+                    f"🔴 <b>商品已售出（SOLD OUT）！</b>\n"
+                    f"最後成交價格：{current_fmt}\n"
                     f"商品：{display_name}\n"
-                    f"目前價格：<b>{current_fmt}</b>\n"
                     f"🔗 <a href=\"{hk_url}\">香港頁面</a> | <a href=\"{jp_url}\">日本原站</a>\n"
                     f"<code>{jp_url}</code>（點擊可直接複製）"
                 )
                 send_telegram_alert(msg)
-            elif yen_price != old_yen:
+                already_notified_sold = True
+
+            # 2. 首次加入通知
+            if old_yen is None and yen_price:
+                msg = (
+                    f"🟢 <b>Mercari 雲端監控已加入！</b>\n"
+                    f"目前價格：<b>{current_fmt}</b>\n"
+                    f"商品：{display_name}\n"
+                    f"🔗 <a href=\"{hk_url}\">香港頁面</a> | <a href=\"{jp_url}\">日本原站</a>\n"
+                    f"<code>{jp_url}</code>（點擊可直接複製）"
+                )
+                send_telegram_alert(msg)
+
+            # 3. 價格變更通知（第一行顯示當前價，第二行顯示變動幅度）
+            elif old_yen and yen_price and yen_price != old_yen:
                 old_fmt = format_dual_price(old_yen, live_rate)
                 diff = yen_price - old_yen
                 diff_fmt = format_dual_price(abs(diff), live_rate)
                 
                 if diff < 0:
-                    status = f"🚨 <b>價格下跌！快搶！</b> (日圓降了 {diff_fmt})"
+                    status_line = f"🚨 <b>目前價格：{current_fmt}</b>"
+                    change_line = f"🔻 價格下跌：<b>降了 {diff_fmt}</b>"
                 else:
-                    status = f"📈 <b>價格上漲！</b> (日圓升了 {diff_fmt})"
+                    status_line = f"📈 <b>目前價格：{current_fmt}</b>"
+                    change_line = f"🔺 價格上漲：<b>升了 {diff_fmt}</b>"
 
                 msg = (
-                    f"{status}\n"
+                    f"{status_line}\n"
+                    f"{change_line}\n"
                     f"商品：{display_name}\n"
-                    f"價格變動：{old_fmt} ➔ <b>{current_fmt}</b>\n"
+                    f"歷史價格：{old_fmt}\n"
                     f"🔗 <a href=\"{hk_url}\">香港頁面</a> | <a href=\"{jp_url}\">日本原站</a>\n"
                     f"<code>{jp_url}</code>（點擊可直接複製）"
                 )
                 send_telegram_alert(msg)
 
-            history[item_id] = yen_price
+            history[item_id] = {
+                "price": yen_price if yen_price else old_yen,
+                "sold": is_sold or already_notified_sold
+            }
 
         browser.close()
 
@@ -183,7 +223,7 @@ def check_all():
         json.dump(history, f, indent=2, ensure_ascii=False)
 
 if __name__ == "__main__":
-    print("🚀 啟動多商品實時外匯雙幣監控...")
+    print("🚀 啟動多商品實時外匯雙幣 + 售出狀態監控...")
     for i in range(300):
         try:
             check_all()
