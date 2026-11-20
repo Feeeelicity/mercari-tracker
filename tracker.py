@@ -46,7 +46,7 @@ def send_telegram_alert(text):
         "chat_id": TG_CHAT_ID,
         "text": text,
         "parse_mode": "HTML",
-        "disable_web_page_preview": False
+        "disable_web_page_preview": True
     }
     try:
         requests.post(url, json=payload, timeout=10)
@@ -72,14 +72,13 @@ def load_items():
                 items.append({
                     "id": item_id,
                     "hk_url": f"https://hk.mercari.com/zh-hant/items/{item_id}",
-                    "jp_url": f"https://jp.mercari.com/item/{item_id}",
                     "name": name_part or item_id
                 })
     return items
 
 def fetch_item_info(page, hk_url):
-    page.goto(hk_url, wait_until="networkidle", timeout=60000)
-    page.wait_for_timeout(3000)
+    page.goto(hk_url, wait_until="domcontentloaded", timeout=30000)
+    page.wait_for_timeout(1500)
     
     title = ""
     try:
@@ -98,7 +97,6 @@ def fetch_item_info(page, hk_url):
     except Exception:
         pass
 
-    # 售罄狀態檢測
     is_sold = False
     sold_keywords = ["已售完", "已售出", "售罄", "売り切れ", "SOLD OUT", "Sold Out"]
     for kw in sold_keywords:
@@ -117,14 +115,11 @@ def fetch_item_info(page, hk_url):
 
     return title, yen_price, is_sold
 
-def check_all():
+def check_all(live_rate):
     items = load_items()
     if not items:
         print("未在 items.txt 找到任何商品！")
         return
-
-    live_rate = get_live_exchange_rate()
-    print(f"📊 當刻最新日圓兌港幣市場即時匯率: {live_rate:.5f}")
 
     history = {}
     if os.path.exists(DATA_FILE):
@@ -145,7 +140,6 @@ def check_all():
         for item in items:
             item_id = item["id"]
             name = item["name"]
-            jp_url = item["jp_url"]
             hk_url = item["hk_url"]
             
             web_title, yen_price, is_sold = fetch_item_info(page, hk_url)
@@ -166,14 +160,13 @@ def check_all():
                 old_yen = record
                 already_notified_sold = False
 
-            # 1. 檢測商品是否已售出
+            # 1. 商品已售出通知
             if is_sold and not already_notified_sold:
                 msg = (
                     f"🔴 <b>商品已售出（SOLD OUT）！</b>\n"
                     f"最後成交價格：{current_fmt}\n"
                     f"商品：{display_name}\n"
-                    f"🔗 <a href=\"{hk_url}\">香港頁面</a> | <a href=\"{jp_url}\">日本原站</a>\n"
-                    f"<code>{jp_url}</code>（點擊可直接複製）"
+                    f"<code>{item_id}</code>"
                 )
                 send_telegram_alert(msg)
                 already_notified_sold = True
@@ -184,12 +177,11 @@ def check_all():
                     f"🟢 <b>Mercari 雲端監控已加入！</b>\n"
                     f"目前價格：<b>{current_fmt}</b>\n"
                     f"商品：{display_name}\n"
-                    f"🔗 <a href=\"{hk_url}\">香港頁面</a> | <a href=\"{jp_url}\">日本原站</a>\n"
-                    f"<code>{jp_url}</code>（點擊可直接複製）"
+                    f"<code>{item_id}</code>"
                 )
                 send_telegram_alert(msg)
 
-            # 3. 價格變更通知（第一行顯示當前價，第二行顯示變動幅度）
+            # 3. 價格變更通知
             elif old_yen and yen_price and yen_price != old_yen:
                 old_fmt = format_dual_price(old_yen, live_rate)
                 diff = yen_price - old_yen
@@ -207,8 +199,7 @@ def check_all():
                     f"{change_line}\n"
                     f"商品：{display_name}\n"
                     f"歷史價格：{old_fmt}\n"
-                    f"🔗 <a href=\"{hk_url}\">香港頁面</a> | <a href=\"{jp_url}\">日本原站</a>\n"
-                    f"<code>{jp_url}</code>（點擊可直接複製）"
+                    f"<code>{item_id}</code>"
                 )
                 send_telegram_alert(msg)
 
@@ -223,10 +214,14 @@ def check_all():
         json.dump(history, f, indent=2, ensure_ascii=False)
 
 if __name__ == "__main__":
-    print("🚀 啟動多商品實時外匯雙幣 + 售出狀態監控...")
-    for i in range(300):
+    print("🚀 啟動 5 秒極速高頻監控...")
+    live_rate = get_live_exchange_rate()
+    for i in range(1800):
+        # 每 120 輪（約 10 分鐘）刷新一次即時匯率，避免頻繁請求匯率 API 拖慢 5 秒速度
+        if i % 120 == 0:
+            live_rate = get_live_exchange_rate()
         try:
-            check_all()
+            check_all(live_rate)
         except Exception as e:
             print(f"輪巡出錯: {e}")
-        time.sleep(30)
+        time.sleep(5)
